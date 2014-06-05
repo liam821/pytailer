@@ -51,8 +51,6 @@ class LogWatcher(object):
         assert callable(callback), repr(callback)
         self.update_files()
         
-        self.debug = False
-
         for id, _info in self._files_map.items():
             file, _type = _info
             file.seek(os.path.getsize(file.name))  # EOF
@@ -94,8 +92,7 @@ class LogWatcher(object):
 
     def log(self, line):
         """Log when a file is un/watched"""
-        if self.debug:
-          print line
+        print line
 
     def listdir(self):
         """List directory and filter files by extension.
