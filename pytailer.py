@@ -44,15 +44,18 @@ class LogWatcher(object):
             file in memory until EOF is reached). Defaults to 1MB.
         """
         
+        self.now = time.time()
         self.filelist = filelist
         self._files_map = {}
         self._callback = callback
         self._sizehint = sizehint
+        self.watch_timer = 5
+        self._watch_timer = time.time()
         assert callable(callback), repr(callback)
         self.update_files()
         
         for id, _info in self._files_map.items():
-            file, _type = _info
+            file, _type, _fsize = _info
             file.seek(os.path.getsize(file.name))  # EOF
             if tail_lines:
                 try:
@@ -82,9 +85,11 @@ class LogWatcher(object):
         # Note that directly calling readlines() as we do is faster
         # than first checking file's last modification times.
         while True:
-            self.update_files()
+            if self._watch_timer + self.watch_timer <= time.time():
+                self.update_files()
+                self._watch_timer = time.time()
             for fid, _info in list(self._files_map.items()):
-                file, _type = _info
+                file, _type, _fsize = _info
                 self.readlines(file,_type)
             if not blocking:
                 return
@@ -164,7 +169,7 @@ class LogWatcher(object):
 
         # check existent files
         for fid, _info in list(self._files_map.items()):
-            file, _type = _info
+            file, _type, _fsize = _info
             try:
                 st = os.stat(file.name)
             except EnvironmentError as err:
@@ -176,7 +181,14 @@ class LogWatcher(object):
                 if fid != self.get_file_id(st):
                     # same name but different file (rotation); reload it.
                     self.unwatch(file, fid)
-                    self.watch(file.name)
+                    self.watch(file.name,_type)
+                elif st.st_size < _fsize:
+                    # file has been truncated
+                    self.unwatch(file, fid)
+                    self.watch(file.name,_type)
+                else:
+                    # update filesize
+                    self._files_map[fid][2] = st.st_size
 
         # add new ones
         for fid, fname,_type in ls:
@@ -188,42 +200,63 @@ class LogWatcher(object):
         invoke callback.
         """
         while True:
-            lines = file.readlines(self._sizehint)
+            try:
+                lines = file.readlines(self._sizehint)
+            except:
+                break
             if not lines:
                 break
             self._callback(file.name, lines,_type)
 
     def watch(self, fname, _type):
+        
+        print "looking for %s" % (fname)
+        if not os.path.isfile(fname):
+            self.log("WARN [%s]: file %s does not exist, skipping" % (time.ctime(),fname))
+            return
+        
         try:
             file = self.open(fname)
-            fid = self.get_file_id(os.stat(fname))
+            st = os.stat(fname)
+            fid = self.get_file_id(st)
         except EnvironmentError as err:
             if err.errno != errno.ENOENT:
                 raise
         else:
             self.log("watching logfile %s" % fname)
-            self._files_map[fid] = [file,_type]
+            self._files_map[fid] = [file,_type,st.st_size] #LIAM
 
     def unwatch(self, file, fid):
         # File no longer exists. If it has been renamed try to read it
         # for the last time in case we're dealing with a rotating log
         # file.
-        self.log("un-watching logfile %s" % file.name)
-        with file:
-            lines = self.readlines(file,self._files_map[fid][1])
-            del self._files_map[fid]
-            if lines:
-                self._callback(file.name, lines)
+        #self.log("un-watching logfile %s" % file.name)
+        if file:
+            if _logPusher.Q.qsize() > 50:
+                print "ERROR: unwatch not readlines() until end of file, Q>50"
+                return True
+            else:
+                try:
+                    lines = self.readlines(file,self._files_map[fid][1])
+                except:
+                    lines = False
+                del self._files_map[fid]
+                if lines:
+                    self._callback(file.name, lines)
+            try:
+                file.close()
+            except:
+                pass
 
     @staticmethod
     def get_file_id(st):
-        if os.name == 'posix':
+        if os.name == 'posix' or os.name == 'java':
             return "%xg%x" % (st.st_dev, st.st_ino)
         else:
             return "%f" % st.st_ctime
 
     def close(self):
         for id, _info in self._files_map.items():
-            file, _type = _info
+            file, _type, _fsize = _info
             file.close()
         self._files_map.clear()
