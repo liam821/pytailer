@@ -224,7 +224,7 @@ class LogWatcher(object):
                 raise
         else:
             self.log("watching logfile %s" % fname)
-            self._files_map[fid] = [file,_type,st.st_size] #LIAM
+            self._files_map[fid] = [file,_type,st.st_size]
 
     def unwatch(self, file, fid):
         # File no longer exists. If it has been renamed try to read it
